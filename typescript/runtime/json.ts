@@ -488,3 +488,193 @@ export function getAnnotation<T>(jb: JsonBinding<T>, annotations: AST.Annotation
   }
   return jb.fromJsonE(ann.v2);
 }
+
+
+
+
+// Checking out whether we could use presence of fields to type guard on ADL style union fields
+// https://github.com/microsoft/TypeScript/pull/15256
+
+type T1 = {
+  fieldT1: {
+    k1: string;
+  }
+};
+
+type T2 = {
+  fieldT2: {
+    k2: number;
+  }
+};
+
+type T3 = {
+  fieldT3: {
+    k3: null;
+  }
+};
+
+// Conclusion:
+
+function mostlyWorks() {
+  type UnionType = T1|T2|T3;
+  const x1 : UnionType = {fieldT1:{k1:'111'}};
+  const x2 : UnionType = {fieldT2:{k2:111}};
+  const x3 : UnionType = {fieldT3:{k3:null}};
+  // const xqx : X = {fieldT1:{k1:'111'}, fieldT3:{k3:null}}; // But it allows this without error
+
+  let xs = [x1,x2,x3];
+
+  for(const v of xs) {
+    if('fieldT1' in v) {
+      // x is type T1 OK
+      const x = v;
+    }
+  }
+}
+
+function works() {
+  type OnlyOneFieldOf<T> = {
+    // for each field of T
+    [k in keyof T]:
+      // take the one field k of T
+      Pick<T, k> &
+      {
+        // for each field of T other than k
+        [k1 in Exclude<keyof T, k>]
+
+          // can (should) be absent (ie undefined)
+          ?:
+
+          // and can never be present
+          never;
+      }
+    ;
+  }[
+    // convert to final union type with exclusives
+
+    // convert {fieldT1: {fieldT1:{...}, fieldT2?:never}, fieldT2: {fieldT2:{...}, fieldT1?:never}}
+    // to the final union: {fieldT1:{...}, fieldT2?:never} | fieldT2: {fieldT2:{...}, fieldT1?:never}
+    keyof T
+  ];
+
+  type X = OnlyOneFieldOf<T1&T2&T3>;
+  const xq1 : X = {fieldT1:{k1:'111'}};
+  const xq2 : X = {fieldT2:{k2:111}};
+  const xq3 : X = {fieldT3:{k3:null}};
+  // const xqx : X = {fieldT1:{k1:'111'}, fieldT3:{k3:null}};  // successfully blocks this with error
+
+  let xqs = [xq1,xq2,xq3];
+
+  // type guard function
+  // https://riptutorial.com/typescript/example/25953/type-guarding-functions
+  function isT1(x: X) : x is T1 {
+    return x['fieldT1'] !== undefined;
+  }
+
+  for(const v of xqs) {
+    /// type guards on presence of union field
+    if(v['fieldT1'] !== undefined) {
+      const x = v;
+    }
+  }
+}
+
+
+
+
+
+/*function isT1( o: T1|T2) : o is T1 {
+  return
+}*/
+
+type Without<T, U> = { [P in Exclude<keyof T, keyof U>]?: never };
+type XOR<T, U> = (T | U) extends object ? (Without<T, U> & U) | (Without<U, T> & T) : T | U;
+
+
+type Without2<T, U> = { [P in Exclude<keyof (Exclude<T,U>), keyof U>]?: never } & U;
+//type Without2<T, U> = { [P in Exclude<keyof (Exclude<T,U>), keyof U>]?: never } & U;
+type XOR2<T, U> = (T | U) extends object ? (Without2<T|U, U>) | (Without2<T|U, T>) : T | U;
+type XOR3<T, U, V> = (T | U | V) extends object ? Without2<T|U|V, U> | Without2<T|U|V, T> | Without2<T|U|V, V> : T | U | V;
+//type XOR2<T, U, V> = (T | U | V) extends object ? Without2<T|V, U> | Without2<U|V, T> | Without2<T|U, V> : T | U | V;
+
+//type XOR3<T, U, V> = (T | U | V) extends object ? Without2<T|U|V, U> | Without2<T|U|V, T> | Without2<T|U|V, V> : T | U | V;
+
+//type All = T1|T2|T3;
+//type T1T2 = Exclude<All, T1>
+
+
+const xx : T1|T2 = {fieldT1: {k1:'111'}, fieldT2:{k2:123}};
+const yy : XOR<T1,T2> = {fieldT1: {k1:'111'}};
+const zz : XOR<T1,T2> = {fieldT2: {k2:111}};
+
+const zzz1 : XOR2<T1,T2> = {fieldT1: {k1:'111'}};
+const zzz2 : XOR2<T1,T2> = {fieldT2: {k2:111}};
+const zzzx : XOR2<T1,T2> = {fieldT1: {k1:'111'}, fieldT2: {k2:111}};
+
+const zzzz1 : XOR3<T1,T2,T3> = {fieldT1: {k1:'111'}};
+const zzzz2 : XOR3<T1,T2,T3> = {fieldT2: {k2:111}};
+const zzzzx : XOR3<T1,T2,T3> = {fieldT1: {k1:'111'}, fieldT2: {k2:111}};
+
+// https://timhwang21.gitbook.io/index/programming/typescript/xor-type
+type OneOf<T, K extends keyof T> = Omit<T, K> &
+  {
+    [k in K]: Pick<Required<T>, k> &
+      {
+        [k1 in Exclude<K, k>]?: never;
+      };
+  }[K];
+
+type OnlyOneFieldOf<T> = {
+  [k in keyof T]: Pick<T, k> & {
+    [k1 in Exclude<keyof T, k>]?: never;
+  }
+  ;
+}[keyof T];
+
+//type X = OnlyOneFieldOf<T1&T2&T3>;
+//type X = XOR2<T1,XOR2<T2,T3>>;
+type X = T1|T2|T3;
+const xq1 : X = {fieldT1:{k1:'111'}};
+const xq2 : X = {fieldT2:{k2:111}};
+const xq3 : X = {fieldT3:{k3:null}};
+// const xqx : X = {fieldT1:{k1:'111'}, fieldT3:{k3:null}};
+
+let xqs = [xq1,xq2,xq3];
+
+for(const v of xqs) {
+  if('fieldT1' in v) {
+    const x = v;
+  }
+}
+
+
+type Q1 = T1 & {
+  fieldT2?: never;
+  fieldT3?: never;
+};
+
+type Q2 = T2 & {
+  fieldT1?: never;
+} & {
+  fieldT3?: never;
+};
+
+type Q3 = T3 & {
+  fieldT1?: never;
+} & {
+  fieldT2?: never;
+};
+
+type Q = Q1|Q2|Q3;
+
+const qxq1 : Q = {fieldT1:{k1:'111'}};
+const qxq2 : Q = {fieldT2:{k2:111}};
+const qxq3 : Q = {fieldT3:{k3:null}};
+const qxqx : Q = {fieldT1:{k1:'111'}, fieldT3:{k3:null}};
+let qxqs = [qxq1,qxq2,qxq3];
+
+for(const v of qxqs) {
+  if('fieldT1' in v) {
+    const x = v;
+  }
+}
